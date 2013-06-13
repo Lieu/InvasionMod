@@ -1,0 +1,652 @@
+package mods.invmod.common.nexus;
+
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Random;
+
+import mods.invmod.common.mod_Invasion;
+import mods.invmod.common.util.FiniteSelectionPool;
+import mods.invmod.common.util.ISelect;
+import mods.invmod.common.util.RandomSelectionPool;
+
+
+/**
+ * Builds Wave objects, dealing with the complexity of initialising them
+ * 
+ * @author Lieu *
+ */
+public class IMWaveBuilder
+{
+	public IMWaveBuilder()
+	{
+		rand = new Random();
+	}
+	
+	/**
+	 * Automatically generates a new wave according to parameters.
+	 */
+	public Wave generateWave(float difficulty, float tierLevel, int lengthSeconds)
+	{
+		float basicMobsPerSecond = 0.12F * difficulty;
+		int numberOfGroups = 7;
+		int numberOfBigGroups = 1;
+		float proportionInGroups = 0.5F;
+		int mobsPerGroup = Math.round(proportionInGroups * basicMobsPerSecond * lengthSeconds / (numberOfGroups + numberOfBigGroups * 2));
+		int mobsPerBigGroup = mobsPerGroup * 2;
+		int remainingMobs = (int)(basicMobsPerSecond * lengthSeconds) - mobsPerGroup * numberOfGroups - mobsPerBigGroup * numberOfBigGroups;
+		int mobsPerSteady = Math.round(0.7f * remainingMobs / numberOfGroups);
+		int extraMobsForFinale = Math.round(0.3f * remainingMobs);
+		int extraMobsForCleanup = (int)(basicMobsPerSecond * lengthSeconds * 0.2F);
+		float timeForGroups = 0.5F;
+		int groupTimeInterval = (int)(lengthSeconds * 1000 * timeForGroups / (numberOfGroups + numberOfBigGroups * 3));
+		int steadyTimeInterval = (int)(lengthSeconds * 1000 * (1 - timeForGroups) / numberOfGroups);
+		
+		int time = 0;
+		ArrayList<WaveEntry> entryList = new ArrayList<WaveEntry>();
+		for(int i = 0; i < numberOfGroups; i++)
+		{
+			if(rand.nextInt(2) == 0)
+			{
+				entryList.add(new WaveEntry(time, time + 3500, mobsPerGroup, 500, generateGroupPool(tierLevel), 25, 3));
+				entryList.add(new WaveEntry(time += groupTimeInterval, time += steadyTimeInterval, mobsPerSteady, 2000, generateSteadyPool(tierLevel), 160, 5));
+			}
+			else
+			{
+				entryList.add(new WaveEntry(time, time += steadyTimeInterval, mobsPerSteady, 2000, generateSteadyPool(tierLevel), 160, 5));
+				entryList.add(new WaveEntry(time, time + 5000, mobsPerGroup, 500, generateGroupPool(tierLevel), 25, 3));				
+				time += groupTimeInterval;
+			}
+		}
+		
+		time += groupTimeInterval * (3 * 0.25);
+		FiniteSelectionPool<IEntityIMPattern> finaleGroup = new FiniteSelectionPool<IEntityIMPattern>();
+		finaleGroup.addEntry(getPattern("thrower"), mobsPerBigGroup / 5);
+		generateGroupPool(tierLevel + 0.5F, finaleGroup, mobsPerBigGroup);
+		WaveEntry finale = new WaveEntry(time, time + 8000, mobsPerBigGroup + mobsPerBigGroup / 7, 500, finaleGroup, 45, 3);
+		finale.addAlert("A large number of mobs are slipping through the nexus rift!", 0);
+		
+		entryList.add(finale);
+		entryList.add(new WaveEntry(time + 5000, (int)(time + groupTimeInterval * (3 * 0.75F)), extraMobsForFinale / 2, 500, generateSteadyPool(tierLevel), 160, 5));
+		entryList.add(new WaveEntry(time + 5000, (int)(time + groupTimeInterval * (3 * 0.75F)), extraMobsForFinale / 2, 500, generateSteadyPool(tierLevel), 160, 5));
+		entryList.add(new WaveEntry(time + 5000, (int)(time + groupTimeInterval * (3 * 0.75F)), extraMobsForFinale / 2, 500, generateSteadyPool(tierLevel), 160, 5));
+		entryList.add(new WaveEntry(time + 15000, (int)(time + 10000 + groupTimeInterval * (3 * 0.75F)), extraMobsForCleanup, 500, generateSteadyPool(tierLevel)));
+		time += groupTimeInterval * (3 * 0.75);
+		
+		return new Wave(time + 16000, groupTimeInterval * 3, entryList);
+	}
+	
+	
+	
+	/**
+	 * Generates a new selection pool with a range of patterns according to
+	 * tier level specified
+	 */
+	private ISelect<IEntityIMPattern> generateGroupPool(float tierLevel)
+	{
+		RandomSelectionPool<IEntityIMPattern> newPool = new RandomSelectionPool<IEntityIMPattern>();
+		generateGroupPool(tierLevel, newPool, 6.0F); // Weight doesn't really matter
+		return newPool;
+	}
+	
+	/**
+	 * Adds a RandomSelectionPool of patterns to an existing FiniteSelectionPool
+	 * with the number of times of this being being selected being the amount
+	 * specified.
+	 */
+	private void generateGroupPool(float tierLevel, FiniteSelectionPool<IEntityIMPattern> startPool, int amount)
+	{
+		RandomSelectionPool<IEntityIMPattern> newPool = new RandomSelectionPool<IEntityIMPattern>();
+		generateGroupPool(tierLevel, newPool, 6.0F);
+		startPool.addEntry(newPool, amount);
+	}
+	
+	/**
+	 * Adds patterns to an existing RandomSelectionPool with the total
+	 * weight of any additions being the weight specified
+	 */
+	private void generateGroupPool(float tierLevel, RandomSelectionPool<IEntityIMPattern> startPool, float weight)
+	{
+		float[] weights = new float[6];
+		for(int i = 0; i < 6; i++)
+		{
+			if(tierLevel - i * 0.5F > 0)
+				weights[i] = tierLevel - i <= 1 ? (tierLevel - i * 0.5F) : 1;
+		}
+					
+		RandomSelectionPool<IEntityIMPattern> zombiePool = new RandomSelectionPool<IEntityIMPattern>();
+		zombiePool.addEntry(getPattern("zombie_t1_any"), ZOMBIE_T1_WEIGHT * weights[0]);
+		zombiePool.addEntry(getPattern("zombie_t2_any_basic"), ZOMBIE_T2_WEIGHT * weights[2]);
+		zombiePool.addEntry(getPattern("zombie_t2_pigman"), ZOMBIE_T2_PIGMAN_WEIGHT * weights[3]);
+		
+		RandomSelectionPool<IEntityIMPattern> spiderPool = new RandomSelectionPool<IEntityIMPattern>();
+		spiderPool.addEntry(getPattern("spider_t1_any"), SPIDER_T1_WEIGHT * weights[0]);
+		spiderPool.addEntry(getPattern("spider_t2_any"), SPIDER_T2_WEIGHT * weights[2]);
+		
+		RandomSelectionPool<IEntityIMPattern> basicPool = new RandomSelectionPool<IEntityIMPattern>();
+		basicPool.addEntry(zombiePool, 3.1F);
+		basicPool.addEntry(spiderPool, 0.7F);
+		basicPool.addEntry(getPattern("skeleton_t1_any"), 0.8F);
+		
+		RandomSelectionPool<IEntityIMPattern> specialPool = new RandomSelectionPool<IEntityIMPattern>();
+		specialPool.addEntry(getPattern("pigengy_t1_any"), 4.0F);
+		specialPool.addEntry(getPattern("thrower"), 1.1F * weights[4]);
+		specialPool.addEntry(getPattern("zombie_t3_any"), 1.1F * weights[5]);
+		specialPool.addEntry(getPattern("creeper_t1_basic"), 0.7F * weights[3]);
+		
+		startPool.addEntry(basicPool, weight * (5.0F / 6.0F));
+		startPool.addEntry(specialPool, weight * (1.0F / 6.0F));
+	}
+	
+	private ISelect<IEntityIMPattern> generateSteadyPool(float tierLevel)
+	{
+		float[] weights = new float[6];
+		for(int i = 0; i < 6; i++)
+		{
+			if(tierLevel - i * 0.5F > 0)
+				weights[i] = tierLevel - i <= 1 ? (tierLevel - i * 0.5F) : 1;
+		}
+					
+		RandomSelectionPool<IEntityIMPattern> zombiePool = new RandomSelectionPool<IEntityIMPattern>();
+		zombiePool.addEntry(getPattern("zombie_t1_any"), ZOMBIE_T1_WEIGHT * weights[0]);
+		zombiePool.addEntry(getPattern("zombie_t2_any_basic"), ZOMBIE_T2_WEIGHT * weights[2]);
+		zombiePool.addEntry(getPattern("zombie_t2_pigman"), ZOMBIE_T2_PIGMAN_WEIGHT * weights[3]);
+		
+		RandomSelectionPool<IEntityIMPattern> spiderPool = new RandomSelectionPool<IEntityIMPattern>();
+		spiderPool.addEntry(getPattern("spider_t1_any"), SPIDER_T1_WEIGHT * weights[0]);
+		spiderPool.addEntry(getPattern("spider_t2_any"), SPIDER_T2_WEIGHT * weights[2]);
+		
+		RandomSelectionPool<IEntityIMPattern> basicPool = new RandomSelectionPool<IEntityIMPattern>();
+		basicPool.addEntry(zombiePool, 3.1F);
+		basicPool.addEntry(spiderPool, 0.7F);
+		basicPool.addEntry(getPattern("skeleton_t1_any"), 0.8F);
+		
+		RandomSelectionPool<IEntityIMPattern> specialPool = new RandomSelectionPool<IEntityIMPattern>();
+		specialPool.addEntry(getPattern("pigengy_t1_any"), 3.0F);
+		specialPool.addEntry(getPattern("zombie_t3_any"), 1.1F * weights[5]);
+		specialPool.addEntry(getPattern("creeper_t1_basic"), 0.8F * weights[3]);
+		
+		RandomSelectionPool<IEntityIMPattern> pool = new RandomSelectionPool<IEntityIMPattern>();
+		pool.addEntry(basicPool, 9.0F);
+		pool.addEntry(specialPool, 1.0F);
+		return pool;
+	}
+	
+	/**
+	 * Returns entity pattern associated with specified name. If the name
+	 * doesn't exist, returns a pattern for a basic zombie
+	 */
+	public static IEntityIMPattern getPattern(String s)
+	{
+		if(commonPatterns.containsKey(s))
+		{
+			return commonPatterns.get(s);
+		}
+		else
+		{
+			mod_Invasion.log("Non-existing pattern name in wave definition: " + s);
+			return commonPatterns.get("zombie_t1_any");
+		}
+	}
+	
+	/**
+	 * Returns true if there exists a defined entity pattern with specified name
+	 */
+	public static boolean isPatternNameValid(String s)
+	{
+		return commonPatterns.containsKey(s);
+	}
+	
+	
+	/**
+	 * Generates a pre-defined wave from a set
+	 */
+	public static Wave generateMainInvasionWave(int waveNumber)
+	{
+		if(waveNumber > WAVES_DEFINED)
+			return generateExtendedWave(waveNumber);
+		
+		ArrayList<WaveEntry> entryList = new ArrayList<WaveEntry>();
+		switch (waveNumber)
+		{
+			case 1:
+				RandomSelectionPool<IEntityIMPattern> wave1BasePool = new RandomSelectionPool<IEntityIMPattern>();
+				wave1BasePool.addEntry(IMWaveBuilder.getPattern("zombie_t1_any"), 3.0F);
+				wave1BasePool.addEntry(IMWaveBuilder.getPattern("spider_t1_any"), 1.0F);
+				WaveEntry wave1Base = new WaveEntry(0, 90000, 8, 2000, wave1BasePool);
+				entryList.add(wave1Base);
+				
+				FiniteSelectionPool<IEntityIMPattern> wave1BurstPool = new FiniteSelectionPool<IEntityIMPattern>();
+				wave1BurstPool.addEntry(IMWaveBuilder.getPattern("pigengy_t1_any"), 1);
+				wave1BurstPool.addEntry(IMWaveBuilder.getPattern("zombie_t1_any"), 2);
+				WaveEntry wave1Engy = new WaveEntry(70000, 73000, 3, 500, wave1BurstPool, 25, 3);
+				entryList.add(wave1Engy);
+				return new Wave(110000, 15000, entryList);
+			case 2:
+				RandomSelectionPool<IEntityIMPattern> wave2BasePool = new RandomSelectionPool<IEntityIMPattern>();
+				wave2BasePool.addEntry(IMWaveBuilder.getPattern("zombie_t1_any"), 3.0F);
+				wave2BasePool.addEntry(IMWaveBuilder.getPattern("spider_t1_any"), 1.0F);
+				wave2BasePool.addEntry(IMWaveBuilder.getPattern("skeleton_t1_any"), 0.7F);
+				wave2BasePool.addEntry(IMWaveBuilder.getPattern("creeper_t1_basic"), 0.038F);
+				WaveEntry wave2Base = new WaveEntry(0, 50000, 5, 2000, wave2BasePool, 110, 5);
+				entryList.add(wave2Base);
+				
+				WaveEntry wave2Base2 = new WaveEntry(50000, 100000, 5, 2000, wave2BasePool.clone(), 110, 5);
+				entryList.add(wave2Base2);
+				
+				RandomSelectionPool<IEntityIMPattern> wave2SpecialPool = new RandomSelectionPool<IEntityIMPattern>();
+				wave2SpecialPool.addEntry(IMWaveBuilder.getPattern("pigengy_t1_any"), 1.0F);
+				WaveEntry wave2Special = new WaveEntry(20000, 23000, 1, 500, wave2SpecialPool);
+				entryList.add(wave2Special);
+				
+				FiniteSelectionPool<IEntityIMPattern> wave2BurstPool = new FiniteSelectionPool<IEntityIMPattern>();
+				wave2BurstPool.addEntry(IMWaveBuilder.getPattern("pigengy_t1_any"), 1);
+				wave2BurstPool.addEntry(IMWaveBuilder.getPattern("zombie_t1_any"), 2);
+				WaveEntry wave2Burst = new WaveEntry(65000, 68000, 3, 500, wave2BurstPool, 25, 2);
+				entryList.add(wave2Burst);
+				return new Wave(120000, 15000, entryList);
+			case 3:
+				RandomSelectionPool<IEntityIMPattern> wave3BasePool = new RandomSelectionPool<IEntityIMPattern>();
+				wave3BasePool.addEntry(IMWaveBuilder.getPattern("zombie_t1_any"), 3.0F);
+				wave3BasePool.addEntry(IMWaveBuilder.getPattern("spider_t1_any"), 1.0F);
+				wave3BasePool.addEntry(IMWaveBuilder.getPattern("skeleton_t1_any"), 0.7F);
+				wave3BasePool.addEntry(IMWaveBuilder.getPattern("creeper_t1_basic"), 0.04F);
+				WaveEntry wave3Base1 = new WaveEntry(0, 30000, 6, 2000, wave3BasePool, 45, 3);
+				entryList.add(wave3Base1);
+				
+				WaveEntry wave3Base2 = new WaveEntry(80000, 100000, 5, 2000, wave3BasePool.clone(), 45, 3);
+				entryList.add(wave3Base2);
+				
+				RandomSelectionPool<IEntityIMPattern> wave3SpecialPool = new RandomSelectionPool<IEntityIMPattern>();
+				wave3SpecialPool.addEntry(IMWaveBuilder.getPattern("spider_t2_any"), 1.0F);
+				WaveEntry wave3Special = new WaveEntry(10000, 12000, 1, 500, wave3SpecialPool);
+				entryList.add(wave3Special);
+				
+				FiniteSelectionPool<IEntityIMPattern> wave3BurstPool = new FiniteSelectionPool<IEntityIMPattern>();
+				wave3BurstPool.addEntry(IMWaveBuilder.getPattern("pigengy_t1_any"), 1);
+				wave3BurstPool.addEntry(IMWaveBuilder.getPattern("zombie_t1_any"), 1);
+				wave3BurstPool.addEntry(IMWaveBuilder.getPattern("zombie_t2_plain"), 1);
+				wave3BurstPool.addEntry(IMWaveBuilder.getPattern("skeleton_t1_any"), 1);
+				wave3BurstPool.addEntry(IMWaveBuilder.getPattern("spider_t1_any"), 1);
+				wave3BurstPool.addEntry(IMWaveBuilder.getPattern("creeper_t1_basic"), 1);
+				WaveEntry wave3Burst = new WaveEntry(50000, 55000, 5, 500, wave3BurstPool, 25, 6);
+				wave3Burst.addAlert("A small group of mobs have gathered...", 0);
+				entryList.add(wave3Burst);
+				return new Wave(120000, 18000, entryList);
+			case 4:
+				RandomSelectionPool<IEntityIMPattern> wave4BasePool = new RandomSelectionPool<IEntityIMPattern>();
+				wave4BasePool.addEntry(IMWaveBuilder.getPattern("zombie_t1_any"), 3.0F);
+				wave4BasePool.addEntry(IMWaveBuilder.getPattern("spider_t1_any"), 1.0F);
+				wave4BasePool.addEntry(IMWaveBuilder.getPattern("skeleton_t1_any"), 0.7F);
+				wave4BasePool.addEntry(IMWaveBuilder.getPattern("creeper_t1_basic"), 0.058F);
+				WaveEntry wave4Base1 = new WaveEntry(0, 50000, 6, 2000, wave4BasePool, 110, 5);
+				entryList.add(wave4Base1);
+				
+				WaveEntry wave4Base2 = new WaveEntry(50000, 100000, 6, 2000, wave4BasePool.clone(), 110, 5);
+				entryList.add(wave4Base2);
+				
+				FiniteSelectionPool<IEntityIMPattern> wave4SpecialPool = new FiniteSelectionPool<IEntityIMPattern>();
+				wave4SpecialPool.addEntry(IMWaveBuilder.getPattern("spider_t2_any"), 1);
+				wave4SpecialPool.addEntry(IMWaveBuilder.getPattern("pigengy_t1_any"), 1);
+				WaveEntry wave4Special = new WaveEntry(0, 90000, 3, 500, wave4SpecialPool);
+				entryList.add(wave4Special);
+				
+				FiniteSelectionPool<IEntityIMPattern> wave4BurstPool = new FiniteSelectionPool<IEntityIMPattern>();
+				wave4BurstPool.addEntry(IMWaveBuilder.getPattern("pigengy_t1_any"), 1);
+				wave4BurstPool.addEntry(IMWaveBuilder.getPattern("zombie_t2_any_basic"), 1);
+				WaveEntry wave4Burst = new WaveEntry(70000, 75000, 2, 500, wave4BurstPool, 25, 2);
+				entryList.add(wave4Burst);
+				return new Wave(120000, 18000, entryList);
+			case 5:
+				RandomSelectionPool<IEntityIMPattern> wave5BasePool = new RandomSelectionPool<IEntityIMPattern>();
+				wave5BasePool.addEntry(IMWaveBuilder.getPattern("zombie_t1_any"), 3.0F);
+				wave5BasePool.addEntry(IMWaveBuilder.getPattern("spider_t1_any"), 1.0F);
+				wave5BasePool.addEntry(IMWaveBuilder.getPattern("skeleton_t1_any"), 0.7F);
+				wave5BasePool.addEntry(IMWaveBuilder.getPattern("creeper_t1_basic"), 0.054F);
+				WaveEntry wave5Base1 = new WaveEntry(0, 40000, 6, 2000, wave5BasePool, 110, 5);
+				entryList.add(wave5Base1);
+				
+				WaveEntry wave5Base2 = new WaveEntry(40000, 80000, 6, 2000, wave5BasePool.clone(), 110, 5);
+				entryList.add(wave5Base2);	
+				
+				RandomSelectionPool<IEntityIMPattern> wave5SpecialPool = new RandomSelectionPool<IEntityIMPattern>();
+				wave5SpecialPool.addEntry(IMWaveBuilder.getPattern("spider_t2_any"), 1.0F);
+				wave5SpecialPool.addEntry(IMWaveBuilder.getPattern("pigengy_t1_any"), 1.0F);
+				WaveEntry wave5Special = new WaveEntry(0, 80000, 3, 500, wave5SpecialPool);
+				entryList.add(wave5Special);
+				
+				FiniteSelectionPool<IEntityIMPattern> wave5BurstPool = new FiniteSelectionPool<IEntityIMPattern>();
+				wave5BurstPool.addEntry(IMWaveBuilder.getPattern("pigengy_t1_any"), 1);
+				wave5BurstPool.addEntry(IMWaveBuilder.getPattern("zombie_t1_any"), 3);
+				wave5BurstPool.addEntry(IMWaveBuilder.getPattern("zombie_t2_any_basic"), 1);
+				wave5BurstPool.addEntry(IMWaveBuilder.getPattern("skeleton_t1_any"), 1);
+				wave5BurstPool.addEntry(IMWaveBuilder.getPattern("spider_t2_any"), 1);
+				wave5BurstPool.addEntry(IMWaveBuilder.getPattern("thrower"), 1);
+				WaveEntry wave5Burst = new WaveEntry(115000, 118000, 8, 500, wave5BurstPool, 35, 5);
+				wave5Burst.addAlert("A large number of mobs are slipping through the nexus rift!", 0);
+				entryList.add(wave5Burst);
+				
+				FiniteSelectionPool<IEntityIMPattern> wave5FinalePool = new FiniteSelectionPool<IEntityIMPattern>();
+				wave5FinalePool.addEntry(IMWaveBuilder.getPattern("zombie_t1_any"), 3);
+				wave5FinalePool.addEntry(IMWaveBuilder.getPattern("zombie_t2_any_basic"), 1);
+				wave5FinalePool.addEntry(IMWaveBuilder.getPattern("skeleton_t1_any"), 1);
+				wave5FinalePool.addEntry(IMWaveBuilder.getPattern("spider_t2_any"), 1);
+				wave5FinalePool.addEntry(IMWaveBuilder.getPattern("spider_t1_any"), 1);
+				WaveEntry wave5Finale = new WaveEntry(135000, 165000, 7, 500, wave5FinalePool);				
+				entryList.add(wave5Finale);
+				return new Wave(130000, 80000, entryList);
+			case 6:
+				RandomSelectionPool<IEntityIMPattern> wave6BasePool = new RandomSelectionPool<IEntityIMPattern>();
+				wave6BasePool.addEntry(IMWaveBuilder.getPattern("zombie_t1_any"), 2.0F);
+				wave6BasePool.addEntry(IMWaveBuilder.getPattern("zombie_t2_any_basic"), 1.0F);
+				wave6BasePool.addEntry(IMWaveBuilder.getPattern("spider_t1_any"), 0.7F);
+				wave6BasePool.addEntry(IMWaveBuilder.getPattern("skeleton_t1_any"), 0.7F);
+				wave6BasePool.addEntry(IMWaveBuilder.getPattern("creeper_t1_basic"), 0.064F);
+				WaveEntry wave6Base1 = new WaveEntry(0, 50000, 7, 2000, wave6BasePool, 110, 5);
+				entryList.add(wave6Base1);
+				
+				WaveEntry wave6Base2 = new WaveEntry(50000, 100000, 6, 2000, wave6BasePool.clone(), 110, 5);
+				entryList.add(wave6Base2);
+				
+				FiniteSelectionPool<IEntityIMPattern> wave6SpecialPool = new FiniteSelectionPool<IEntityIMPattern>();
+				wave6SpecialPool.addEntry(IMWaveBuilder.getPattern("spider_t2_any"), 1);
+				wave6SpecialPool.addEntry(IMWaveBuilder.getPattern("pigengy_t1_any"), 1);
+				WaveEntry wave6Special = new WaveEntry(0, 90000, 2, 500, wave6SpecialPool);
+				entryList.add(wave6Special);
+				
+				FiniteSelectionPool<IEntityIMPattern> wave6BurstPool = new FiniteSelectionPool<IEntityIMPattern>();
+				wave6BurstPool.addEntry(IMWaveBuilder.getPattern("pigengy_t1_any"), 1);
+				wave6BurstPool.addEntry(IMWaveBuilder.getPattern("zombie_t2_any_basic"), 2);
+				wave6BurstPool.addEntry(IMWaveBuilder.getPattern("zombie_t1_any"), 1);
+				WaveEntry wave6Burst = new WaveEntry(70000, 75000, 4, 500, wave6BurstPool, 25, 2);
+				entryList.add(wave6Burst);
+				return new Wave(110000, 25000, entryList);
+			case 7:
+				RandomSelectionPool<IEntityIMPattern> wave7BasePool = new RandomSelectionPool<IEntityIMPattern>();
+				wave7BasePool.addEntry(IMWaveBuilder.getPattern("zombie_t1_any"), 2.0F);
+				wave7BasePool.addEntry(IMWaveBuilder.getPattern("zombie_t2_any_basic"), 1.0F);
+				wave7BasePool.addEntry(IMWaveBuilder.getPattern("spider_t1_any"), 0.7F);
+				wave7BasePool.addEntry(IMWaveBuilder.getPattern("skeleton_t1_any"), 0.7F);
+				wave7BasePool.addEntry(IMWaveBuilder.getPattern("creeper_t1_basic"), 0.064F);
+				WaveEntry wave7Base1 = new WaveEntry(0, 30000, 7, 2000, wave7BasePool, 45, 5);
+				entryList.add(wave7Base1);
+				
+				FiniteSelectionPool<IEntityIMPattern> wave7SpecialPool = new FiniteSelectionPool<IEntityIMPattern>();
+				wave7SpecialPool.addEntry(IMWaveBuilder.getPattern("spider_t2_any"), 1);
+				wave7SpecialPool.addEntry(IMWaveBuilder.getPattern("pigengy_t1_any"), 1);
+				wave7SpecialPool.addEntry(IMWaveBuilder.getPattern("thrower"), 1);
+				WaveEntry wave7Special = new WaveEntry(0, 60000, 3, 500, wave7SpecialPool);
+				entryList.add(wave7Special);
+				
+				FiniteSelectionPool<IEntityIMPattern> wave7BurstPool = new FiniteSelectionPool<IEntityIMPattern>();
+				wave7BurstPool.addEntry(IMWaveBuilder.getPattern("pigengy_t1_any"), 1);
+				wave7BurstPool.addEntry(IMWaveBuilder.getPattern("zombie_t2_any_basic"), 2);
+				wave7BurstPool.addEntry(IMWaveBuilder.getPattern("zombie_t1_any"), 1);
+				wave7BurstPool.addEntry(IMWaveBuilder.getPattern("spider_t2_any"), 1);
+				WaveEntry wave7Burst = new WaveEntry(65000, 67000, 5, 500, wave7BurstPool, 45, 2);
+				entryList.add(wave7Burst);
+				
+				FiniteSelectionPool<IEntityIMPattern> wave7Burst2Pool = new FiniteSelectionPool<IEntityIMPattern>();
+				wave7Burst2Pool.addEntry(IMWaveBuilder.getPattern("pigengy_t1_any"), 1);
+				wave7Burst2Pool.addEntry(IMWaveBuilder.getPattern("zombie_t2_pigman"), 3);
+				WaveEntry wave7Burst2 = new WaveEntry(95000, 97000, 4, 500, wave7Burst2Pool, 45, 2);
+				entryList.add(wave7Burst2);
+				
+				return new Wave(120000, 36000, entryList);
+			case 8:
+				RandomSelectionPool<IEntityIMPattern> wave8BasePool = new RandomSelectionPool<IEntityIMPattern>();
+				wave8BasePool.addEntry(IMWaveBuilder.getPattern("zombie_t1_any"), 2.0F);
+				wave8BasePool.addEntry(IMWaveBuilder.getPattern("zombie_t2_any_basic"), 1.5F);
+				wave8BasePool.addEntry(IMWaveBuilder.getPattern("spider_t1_any"), 0.7F);
+				wave8BasePool.addEntry(IMWaveBuilder.getPattern("skeleton_t1_any"), 0.7F);
+				wave8BasePool.addEntry(IMWaveBuilder.getPattern("creeper_t1_basic"), 0.064F);
+				WaveEntry wave8Base1 = new WaveEntry(0, 35000, 7, 2000, wave8BasePool, 110, 5);
+				entryList.add(wave8Base1);
+				
+				WaveEntry wave8Base2 = new WaveEntry(80000, 110000, 4, 2000, wave8BasePool.clone(), 110, 5);
+				entryList.add(wave8Base2);
+				
+				FiniteSelectionPool<IEntityIMPattern> wave8SpecialPool = new FiniteSelectionPool<IEntityIMPattern>();
+				wave8SpecialPool.addEntry(IMWaveBuilder.getPattern("spider_t2_any"), 1);
+				wave8SpecialPool.addEntry(IMWaveBuilder.getPattern("pigengy_t1_any"), 1);
+				WaveEntry wave8Special = new WaveEntry(0, 90000, 2, 500, wave8SpecialPool);
+				entryList.add(wave8Special);
+				
+				FiniteSelectionPool<IEntityIMPattern> wave8BurstPool = new FiniteSelectionPool<IEntityIMPattern>();
+				wave8BurstPool.addEntry(IMWaveBuilder.getPattern("pigengy_t1_any"), 1);
+				wave8BurstPool.addEntry(IMWaveBuilder.getPattern("zombie_t2_any_basic"), 3);
+				wave8BurstPool.addEntry(IMWaveBuilder.getPattern("zombie_t1_any"), 2);
+				wave8BurstPool.addEntry(IMWaveBuilder.getPattern("skeleton_t1_any"), 1);
+				wave8BurstPool.addEntry(IMWaveBuilder.getPattern("creeper_t1_basic"), 1);
+				WaveEntry wave8Burst = new WaveEntry(60000, 63000, 8, 500, wave8BurstPool, 25, 2);
+				wave8Burst.addAlert("A group of mobs have gathered...", 0);
+				entryList.add(wave8Burst);
+				return new Wave(110000, 30000, entryList);
+			case 9:
+				RandomSelectionPool<IEntityIMPattern> wave9BasePool = new RandomSelectionPool<IEntityIMPattern>();
+				wave9BasePool.addEntry(IMWaveBuilder.getPattern("zombie_t1_any"), 2.0F);
+				wave9BasePool.addEntry(IMWaveBuilder.getPattern("zombie_t2_any_basic"), 2.0F);
+				wave9BasePool.addEntry(IMWaveBuilder.getPattern("spider_t1_any"), 0.7F);
+				wave9BasePool.addEntry(IMWaveBuilder.getPattern("skeleton_t1_any"), 0.7F);
+				wave9BasePool.addEntry(IMWaveBuilder.getPattern("creeper_t1_basic"), 0.074F);
+				WaveEntry wave9Base1 = new WaveEntry(0, 30000, 7, 2000, wave9BasePool, 45, 5);
+				entryList.add(wave9Base1);
+				
+				FiniteSelectionPool<IEntityIMPattern> wave9SpecialPool = new FiniteSelectionPool<IEntityIMPattern>();
+				wave9SpecialPool.addEntry(IMWaveBuilder.getPattern("spider_t2_any"), 1);
+				wave9SpecialPool.addEntry(IMWaveBuilder.getPattern("pigengy_t1_any"), 1);
+				WaveEntry wave9Special = new WaveEntry(0, 90000, 3, 500, wave9SpecialPool);
+				entryList.add(wave9Special);
+				
+				FiniteSelectionPool<IEntityIMPattern> wave9BurstPool = new FiniteSelectionPool<IEntityIMPattern>();
+				wave9BurstPool.addEntry(IMWaveBuilder.getPattern("pigengy_t1_any"), 1);
+				wave9BurstPool.addEntry(IMWaveBuilder.getPattern("zombie_t2_pigman"), 3);
+				wave9BurstPool.addEntry(IMWaveBuilder.getPattern("zombie_t1_any"), 1);
+				wave9BurstPool.addEntry(IMWaveBuilder.getPattern("skeleton_t1_any"), 1);
+				wave9BurstPool.addEntry(IMWaveBuilder.getPattern("zombie_t3_any"), 1);
+				WaveEntry wave9Burst = new WaveEntry(65000, 67000, 6, 500, wave9BurstPool, 25, 3);
+				entryList.add(wave9Burst);
+				
+				FiniteSelectionPool<IEntityIMPattern> wave9Burst2Pool = new FiniteSelectionPool<IEntityIMPattern>();
+				wave9Burst2Pool.addEntry(IMWaveBuilder.getPattern("zombie_t2_any_basic"), 2);
+				wave9Burst2Pool.addEntry(IMWaveBuilder.getPattern("zombie_t1_any"), 3);
+				wave9Burst2Pool.addEntry(IMWaveBuilder.getPattern("spider_t2_any"), 1);
+				WaveEntry wave9Burst2 = new WaveEntry(95000, 97000, 6, 500, wave9Burst2Pool, 45, 2);
+				entryList.add(wave9Burst2);
+				
+				return new Wave(120000, 35000, entryList);
+			case 10:
+				RandomSelectionPool<IEntityIMPattern> wave10BasePool = new RandomSelectionPool<IEntityIMPattern>();
+				wave10BasePool.addEntry(IMWaveBuilder.getPattern("zombie_t1_any"), 1.5F);
+				wave10BasePool.addEntry(IMWaveBuilder.getPattern("zombie_t2_any_basic"), 2.2F);
+				wave10BasePool.addEntry(IMWaveBuilder.getPattern("spider_t1_any"), 0.7F);
+				wave10BasePool.addEntry(IMWaveBuilder.getPattern("skeleton_t1_any"), 0.7F);
+				wave10BasePool.addEntry(IMWaveBuilder.getPattern("creeper_t1_basic"), 0.084F);
+				WaveEntry wave10Base1 = new WaveEntry(0, 40000, 9, 2000, wave10BasePool, 110, 5);
+				entryList.add(wave10Base1);
+				
+				WaveEntry wave10Base2 = new WaveEntry(40000, 80000, 7, 2000, wave10BasePool.clone(), 110, 5);
+				entryList.add(wave10Base2);	
+				
+				RandomSelectionPool<IEntityIMPattern> wave10SpecialPool = new RandomSelectionPool<IEntityIMPattern>();
+				wave10SpecialPool.addEntry(IMWaveBuilder.getPattern("spider_t2_any"), 1.0F);
+				wave10SpecialPool.addEntry(IMWaveBuilder.getPattern("pigengy_t1_any"), 1.0F);
+				WaveEntry wave10Special = new WaveEntry(0, 80000, 3, 500, wave10SpecialPool);
+				entryList.add(wave10Special);
+				
+				FiniteSelectionPool<IEntityIMPattern> wave10BurstPool = new FiniteSelectionPool<IEntityIMPattern>();
+				wave10BurstPool.addEntry(IMWaveBuilder.getPattern("pigengy_t1_any"), 2);
+				wave10BurstPool.addEntry(IMWaveBuilder.getPattern("zombie_t1_any"), 2);
+				wave10BurstPool.addEntry(IMWaveBuilder.getPattern("zombie_t2_any_basic"), 2);
+				wave10BurstPool.addEntry(IMWaveBuilder.getPattern("zombie_t2_pigman"), 3);
+				wave10BurstPool.addEntry(IMWaveBuilder.getPattern("skeleton_t1_any"), 1);
+				wave10BurstPool.addEntry(IMWaveBuilder.getPattern("spider_t2_any"), 1);
+				wave10BurstPool.addEntry(IMWaveBuilder.getPattern("thrower"), 1);
+				WaveEntry wave10Burst = new WaveEntry(125000, 128000, 12, 500, wave10BurstPool, 35, 5);
+				wave10Burst.addAlert("A large number of mobs are slipping through the nexus rift!", 0);
+				entryList.add(wave10Burst);
+				
+				FiniteSelectionPool<IEntityIMPattern> wave10FinalePool = new FiniteSelectionPool<IEntityIMPattern>();
+				wave10FinalePool.addEntry(IMWaveBuilder.getPattern("zombie_t1_any"), 2);
+				wave10FinalePool.addEntry(IMWaveBuilder.getPattern("zombie_t2_any_basic"), 2);
+				wave10FinalePool.addEntry(IMWaveBuilder.getPattern("skeleton_t1_any"), 1);
+				wave10FinalePool.addEntry(IMWaveBuilder.getPattern("spider_t2_any"), 1);
+				wave10FinalePool.addEntry(IMWaveBuilder.getPattern("spider_t1_any"), 2);
+				WaveEntry wave10Finale = new WaveEntry(152000, 170000, 7, 500, wave10FinalePool);				
+				entryList.add(wave10Finale);
+				return new Wave(172000, 60000, entryList);
+			case 11:
+				RandomSelectionPool<IEntityIMPattern> wave11BasePool = new RandomSelectionPool<IEntityIMPattern>();
+				wave11BasePool.addEntry(IMWaveBuilder.getPattern("zombie_t1_any"), 1.5F);
+				wave11BasePool.addEntry(IMWaveBuilder.getPattern("zombie_t2_any_basic"), 2.2F);
+				wave11BasePool.addEntry(IMWaveBuilder.getPattern("zombie_t3_any"), 0.185F);
+				wave11BasePool.addEntry(IMWaveBuilder.getPattern("zombie_t2_pigman"), 0.8F);
+				wave11BasePool.addEntry(IMWaveBuilder.getPattern("skeleton_t1_any"), 0.7F);
+				wave11BasePool.addEntry(IMWaveBuilder.getPattern("thrower"), 0.1F);
+				wave11BasePool.addEntry(IMWaveBuilder.getPattern("creeper_t1_basic"), 0.064F);
+				WaveEntry wave11Base1 = new WaveEntry(0, 30000, 7, 2000, wave11BasePool, 45, 5);
+				entryList.add(wave11Base1);
+				
+				FiniteSelectionPool<IEntityIMPattern> wave11SpecialPool = new FiniteSelectionPool<IEntityIMPattern>();
+				wave11SpecialPool.addEntry(IMWaveBuilder.getPattern("spider_t2_any"), 1);
+				wave11SpecialPool.addEntry(IMWaveBuilder.getPattern("pigengy_t1_any"), 1);
+				WaveEntry wave11Special = new WaveEntry(0, 90000, 3, 500, wave11SpecialPool);
+				entryList.add(wave11Special);
+				
+				RandomSelectionPool<IEntityIMPattern> wave11BurstPool = new RandomSelectionPool<IEntityIMPattern>();
+				wave11BurstPool.addEntry(IMWaveBuilder.getPattern("pigengy_t1_any"), 1.0F);
+				wave11BurstPool.addEntry(IMWaveBuilder.getPattern("zombie_t2_pigman"), 2.0F);
+				wave11BurstPool.addEntry(IMWaveBuilder.getPattern("zombie_t2_any"), 3.0F);
+				wave11BurstPool.addEntry(IMWaveBuilder.getPattern("zombie_t1_any"), 1.0F);
+				wave11BurstPool.addEntry(IMWaveBuilder.getPattern("skeleton_t1_any"), 1.0F);
+				wave11BurstPool.addEntry(IMWaveBuilder.getPattern("thrower"), 0.8F);
+				wave11BurstPool.addEntry(IMWaveBuilder.getPattern("creeper_t1_basic"), 0.8F);
+				WaveEntry wave11Burst = new WaveEntry(65000, 67000, 7, 500, wave11BurstPool, 25, 3);
+				entryList.add(wave11Burst);
+				
+				FiniteSelectionPool<IEntityIMPattern> wave11Burst2Pool = new FiniteSelectionPool<IEntityIMPattern>();
+				wave11Burst2Pool.addEntry(IMWaveBuilder.getPattern("zombie_t2_any_basic"), 2);
+				wave11Burst2Pool.addEntry(IMWaveBuilder.getPattern("zombie_t1_any"), 3);
+				wave11Burst2Pool.addEntry(IMWaveBuilder.getPattern("spider_t2_any"), 1);
+				WaveEntry wave11Burst2 = new WaveEntry(95000, 97000, 6, 500, wave11Burst2Pool, 45, 2);
+				entryList.add(wave11Burst2);
+				
+				return new Wave(120000, 35000, entryList);
+			default:
+				return null;
+		}
+	}
+	
+	private static Wave generateExtendedWave(int waveNumber)
+	{
+		float mobScale = (float)Math.pow(1.09F, (waveNumber - WAVES_DEFINED));
+		float timeScale = 1 + (waveNumber - WAVES_DEFINED) * 0.04F;
+		ArrayList<WaveEntry> entryList = new ArrayList<WaveEntry>();
+		RandomSelectionPool<IEntityIMPattern> wave11BasePool = new RandomSelectionPool<IEntityIMPattern>();
+		wave11BasePool.addEntry(IMWaveBuilder.getPattern("zombie_t1_any"), 1.5F);
+		wave11BasePool.addEntry(IMWaveBuilder.getPattern("zombie_t2_any_basic"), 2.2F);
+		wave11BasePool.addEntry(IMWaveBuilder.getPattern("zombie_t2_pigman"), 0.8F);
+		wave11BasePool.addEntry(IMWaveBuilder.getPattern("zombie_t3_any"), 0.26F);
+		wave11BasePool.addEntry(IMWaveBuilder.getPattern("skeleton_t1_any"), 0.7F);
+		wave11BasePool.addEntry(IMWaveBuilder.getPattern("thrower"), 0.18F);
+		wave11BasePool.addEntry(IMWaveBuilder.getPattern("creeper_t1_basic"), 0.054F);
+		WaveEntry wave11Base1 = new WaveEntry(0, (int)(timeScale * 30000), (int)(mobScale * 7), 2000, wave11BasePool, 45, 5);
+		entryList.add(wave11Base1);
+		
+		FiniteSelectionPool<IEntityIMPattern> wave11SpecialPool = new FiniteSelectionPool<IEntityIMPattern>();
+		wave11SpecialPool.addEntry(IMWaveBuilder.getPattern("spider_t2_any"), 2);
+		wave11SpecialPool.addEntry(IMWaveBuilder.getPattern("pigengy_t1_any"), 1);
+		WaveEntry wave11Special = new WaveEntry(0, (int)(timeScale * 90000), (int)(mobScale * 3), 500, wave11SpecialPool);
+		entryList.add(wave11Special);
+		
+		RandomSelectionPool<IEntityIMPattern> wave11BurstPool = new RandomSelectionPool<IEntityIMPattern>();
+		wave11BurstPool.addEntry(IMWaveBuilder.getPattern("zombie_t2_pigman"), 1.5F);
+		wave11BurstPool.addEntry(IMWaveBuilder.getPattern("zombie_t2_any"), 1.5F);
+		wave11BurstPool.addEntry(IMWaveBuilder.getPattern("spider_t2_any"), 1.0F);
+		wave11BurstPool.addEntry(IMWaveBuilder.getPattern("zombie_t1_any"), 1.0F);
+		wave11BurstPool.addEntry(IMWaveBuilder.getPattern("skeleton_t1_any"), 1.0F);
+		wave11BurstPool.addEntry(IMWaveBuilder.getPattern("thrower"), 0.5F);
+		wave11BurstPool.addEntry(IMWaveBuilder.getPattern("zombie_t3_any"), 0.5F);
+		wave11BurstPool.addEntry(IMWaveBuilder.getPattern("creeper_t1_basic"), 0.42F);
+		WaveEntry wave11Burst = new WaveEntry((int)(timeScale * 65000), (int)(timeScale * 67000), (int)(mobScale * 7), 500, wave11BurstPool, 25, 3);
+		entryList.add(wave11Burst);
+		
+		FiniteSelectionPool<IEntityIMPattern> wave11Burst2Pool = new FiniteSelectionPool<IEntityIMPattern>();
+		wave11Burst2Pool.addEntry(IMWaveBuilder.getPattern("zombie_t2_any_basic"), 2);
+		wave11Burst2Pool.addEntry(IMWaveBuilder.getPattern("zombie_t1_any"), 3);
+		wave11Burst2Pool.addEntry(IMWaveBuilder.getPattern("spider_t2_any"), 1);
+		WaveEntry wave11Burst2 = new WaveEntry((int)(timeScale * 95000), (int)(timeScale * 97000), (int)(mobScale * 6), 500, wave11Burst2Pool, 45, 2);
+		entryList.add(wave11Burst2);
+		
+		return new Wave((int)(timeScale * 120000), (int)(timeScale * 35000), entryList);
+	}
+	
+	public static final int WAVES_DEFINED = 11;
+	
+	private Random rand;
+	
+	private static final float ZOMBIE_T1_WEIGHT = 1.0F;
+	private static final float ZOMBIE_T2_WEIGHT = 2.0F;
+	private static final float ZOMBIE_T2_PIGMAN_WEIGHT = 1.0F;
+	private static final float SPIDER_T1_WEIGHT = 1.0F;
+	private static final float SPIDER_T2_WEIGHT = 2.0F;
+	
+	private static Map<String, IEntityIMPattern> commonPatterns = new HashMap<String, IEntityIMPattern>();
+	
+	static
+	{
+		EntityPattern zombieT1Any = new EntityPattern(IMEntityType.ZOMBIE);
+		zombieT1Any.addTier(1, 1.0F);
+		zombieT1Any.addFlavour(0, 3.0f);
+		zombieT1Any.addFlavour(1, 1.0f);
+		EntityPattern zombieT2Basic = new EntityPattern(IMEntityType.ZOMBIE);
+		zombieT2Basic.addTier(2, 1.0F);
+		zombieT2Basic.addFlavour(0, 2.0F);
+		zombieT2Basic.addFlavour(1, 1.0F);
+		zombieT2Basic.addFlavour(2, 0.4F);
+		EntityPattern zombieT2Plain = new EntityPattern(IMEntityType.ZOMBIE);
+		zombieT2Plain.addTier(2, 1.0F);
+		zombieT2Plain.addFlavour(0, 1.0F);
+		EntityPattern zombieT2Tar = new EntityPattern(IMEntityType.ZOMBIE);
+		zombieT2Tar.addTier(2, 1.0F);
+		zombieT2Tar.addFlavour(2, 1.0F);
+		zombieT2Tar.addTexture(5, 1.0f);
+		EntityPattern zombieT2Pigman = new EntityPattern(IMEntityType.ZOMBIE);
+		zombieT2Pigman.addTier(2, 1.0F);
+		zombieT2Pigman.addFlavour(3, 1.0F);
+		zombieT2Pigman.addTexture(3, 1.0f);
+		EntityPattern zombieT3Any = new EntityPattern(IMEntityType.ZOMBIE);
+		zombieT3Any.addTier(3, 1.0F);
+		zombieT3Any.addFlavour(0, 1.0f);
+		EntityPattern spiderT1Any = new EntityPattern(IMEntityType.SPIDER);
+		spiderT1Any.addTier(1, 1.0F);
+		EntityPattern spiderT2Any = new EntityPattern(IMEntityType.SPIDER);
+		spiderT2Any.addTier(2, 1.0F);
+		spiderT2Any.addFlavour(0, 1.0F);
+		spiderT2Any.addFlavour(1, 1.0F);
+		EntityPattern pigEngyT1Any = new EntityPattern(IMEntityType.PIG_ENGINEER);
+		pigEngyT1Any.addTier(1, 1.0F);
+		EntityPattern skeletonT1Any = new EntityPattern(IMEntityType.SKELETON);
+		skeletonT1Any.addTier(1, 1.0F);
+		EntityPattern thrower = new EntityPattern(IMEntityType.THROWER);
+		thrower.addTier(1, 1.0F);
+		EntityPattern burrower = new EntityPattern(IMEntityType.BURROWER);
+		burrower.addTier(1, 1.0F);
+		EntityPattern creeper = new EntityPattern(IMEntityType.CREEPER);
+		creeper.addTier(1, 1.0F);
+		commonPatterns.put("zombie_t1_any", zombieT1Any);
+		commonPatterns.put("zombie_t2_any_basic", zombieT2Basic);
+		commonPatterns.put("zombie_t2_plain", zombieT2Plain);
+		commonPatterns.put("zombie_t2_tar", zombieT2Tar);
+		commonPatterns.put("zombie_t2_pigman", zombieT2Pigman);
+		commonPatterns.put("zombie_t3_any", zombieT3Any);
+		commonPatterns.put("spider_t1_any", spiderT1Any);
+		commonPatterns.put("spider_t2_any", spiderT2Any);
+		commonPatterns.put("pigengy_t1_any", pigEngyT1Any);
+		commonPatterns.put("skeleton_t1_any", skeletonT1Any);
+		commonPatterns.put("thrower", thrower);
+		commonPatterns.put("burrower", burrower);
+		commonPatterns.put("creeper_t1_basic", creeper);
+	}
+}
